@@ -79,7 +79,7 @@ namespace LLama.Examples.Examples
                 }
 
                 Console.ForegroundColor = ConsoleColor.Blue;
-                Console.WriteLine($"Cosine similarity: {similarity:F4}. Press any key.");
+                Console.WriteLine($"Cosine similarity: {similarity:F4}.");
             }
         }
         private static float CosineSimilarity(float[] vec1, float[] vec2)
