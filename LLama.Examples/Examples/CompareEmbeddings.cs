@@ -50,6 +50,34 @@ namespace LLama.Examples.Examples
                 // Compute cosine similarity
                 var similarity = CosineSimilarity(embedding1.ToArray(), embedding2.ToArray());
 
+                Console.ForegroundColor = ConsoleColor.Gray;
+
+                // Initialize tokenizer from weights and model params
+                using var context = new LLamaContext(weights, @params);
+
+                // Tokenize sentences
+                var tokens1 = context.Tokenize(sentence1, true);
+                var tokens2 = context.Tokenize(sentence2, true);
+
+                var decoder = new StreamingTokenDecoder(context);
+                var tokens = new List<IReadOnlyList<LLamaToken>> { tokens1, tokens2 };
+
+                //Write out the text representation of each token
+                var flag = false;
+
+                foreach (var list in tokens)
+                {
+                    foreach (var token in list)
+                    {
+                        if (flag) Console.Write("|");
+                        decoder.Add(token);
+                        Console.Write(decoder.Read());
+                        flag = true;
+                    }
+                    flag = false;
+                    Console.WriteLine();
+                }
+
                 Console.ForegroundColor = ConsoleColor.Blue;
                 Console.WriteLine($"Cosine similarity: {similarity:F4}. Press any key.");
             }
