@@ -12,8 +12,13 @@ namespace LLama.Examples.Examples
 
             var parameters = new ModelParams(modelPath)
             {
-                GpuLayerCount = 5
+                // Ensure GPU layers are disabled — this forces CPU-only execution
+                GpuLayerCount = 0,
+
+                // Optional: set context size and other performance-related settings
+                ContextSize = 2048,
             };
+
             using var model = await LLamaWeights.LoadFromFileAsync(parameters);
             var ex = new StatelessExecutor(model, parameters)
             {
