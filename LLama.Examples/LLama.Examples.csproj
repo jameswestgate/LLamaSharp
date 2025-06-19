@@ -37,6 +37,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Assets\password-tokenise.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="Assets\BoolQ\train.csv">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
