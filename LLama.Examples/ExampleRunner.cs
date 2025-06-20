@@ -5,6 +5,7 @@ public class ExampleRunner
 {
     private static readonly Dictionary<string, Func<Task>> Examples = new()
     {
+        { "Quick Executor: Password Comparison", PasswordComparisonExecute.Run },
         { "LLama Model: Get embeddings", GetEmbeddings.Run },
         { "LLama Model: Compare embeddings", CompareEmbeddings.Run },
         { "LLama Model: Quantize", QuantizeModel.Run },

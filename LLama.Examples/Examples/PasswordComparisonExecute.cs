@@ -1,4 +1,4 @@
-using DocumentFormat.OpenXml.InkML;
+using DocumentFormat.OpenXml.Spreadsheet;
 using LLama.Common;
 using LLama.Examples.Extensions;
 using LLama.Native;
@@ -12,120 +12,113 @@ namespace LLama.Examples.Examples
         public static async Task Run()
         {
             var modelPath = UserSettings.GetModelPath();
-            var prompt = (await File.ReadAllTextAsync("Assets/password-tokenise.txt")).Trim();
+            var promptTemplate = (await File.ReadAllTextAsync("Assets/password-tokenise.txt")).Trim();
 
             var parameters = new ModelParams(modelPath)
             {
-                // Ensure GPU layers are disabled — this forces CPU-only execution
                 GpuLayerCount = 0,
-
-                // Optional: set context size and other performance-related settings
                 ContextSize = 2048,
             };
 
             using var model = await LLamaWeights.LoadFromFileAsync(parameters);
-            var ex = new StatelessExecutor(model, parameters);
-
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("Loading the generative model and running initial prompt. ");
-            Console.ForegroundColor = ConsoleColor.White;
+            var executor = new StatelessExecutor(model, parameters);
 
             var inferenceParams = new InferenceParams
             {
-                SamplingPipeline = new DefaultSamplingPipeline
-                {
-                    Temperature = 0.0f
-                },
-
+                SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.0f },
                 AntiPrompts = new List<string> { "Question:", "#", "Question: ", ".\n" },
                 MaxTokens = 600
             };
 
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("Enter your password:");
+            Console.Write("Enter first password: ");
             Console.ForegroundColor = ConsoleColor.White;
-
-            Console.ForegroundColor = ConsoleColor.Green;
-            var password = Console.ReadLine();
-            Console.ForegroundColor = ConsoleColor.White;
-
-            prompt = prompt.Replace("{password}", password);
-
-            var result = new StringBuilder();
-
-            await foreach (var text in ex.InferAsync(prompt, inferenceParams).Spinner())
-            {
-                Console.Write(text);
-                result.Append(text);
-            }
-
-            var comparisons = File.ReadAllLines("Assets/password-comparisons.txt").ToList();
+            var password1 = Console.ReadLine();
 
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("Loading the embedding model and running comparisons ...");
+            Console.Write("Enter second password: ");
+            Console.ForegroundColor = ConsoleColor.White;
+            var password2 = Console.ReadLine();
+
+            var result1 = await GetModelOutput(executor, inferenceParams, promptTemplate.Replace("{password}", password1));
+
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.Write($"First password semantic tokens: ");
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.WriteLine(result1);
+            Console.ForegroundColor = ConsoleColor.Gray;
+
+            var result2 = await GetModelOutput(executor, inferenceParams, promptTemplate.Replace("{password}", password2));
+
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.Write($"Second password semantic tokens: ");
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.WriteLine(result2);
+            Console.ForegroundColor = ConsoleColor.Gray;
+
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("\nGenerating embeddings and calculating similarity...");
             Console.ForegroundColor = ConsoleColor.White;
 
-            //DEtermine the path to the embedding model given the model path of the generative model
             var embeddingModel = "all-MiniLM-L12-v2.Q8_0.gguf";
+            var embeddingPath = Path.Combine(Path.GetDirectoryName(modelPath), embeddingModel);
 
-            // Replace the filename in modelPath with myFile
-            var newPath = Path.Combine(Path.GetDirectoryName(modelPath), embeddingModel);
-
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            var @params = new ModelParams(newPath)
+            var embedParams = new ModelParams(embeddingPath)
             {
-                // Embedding models can return one embedding per token, or all of them can be combined ("pooled") into
-                // one single embedding. Setting PoolingType to "Mean" will combine all of the embeddings using mean average.
-                PoolingType = LLamaPoolingType.Mean,
+                PoolingType = LLamaPoolingType.Mean
             };
 
-            using var weights = await LLamaWeights.LoadFromFileAsync(@params);
-            var embedder = new LLamaEmbedder(weights, @params);
+            using var weights = await LLamaWeights.LoadFromFileAsync(embedParams);
+            var embedder = new LLamaEmbedder(weights, embedParams);
 
-            // Initialize tokenizer from weights and model params
-            using var context = new LLamaContext(weights, @params);
+            using var context = new LLamaContext(weights, embedParams);
 
-            // Get embeddings, because we are using mean above, we should only get exacty one embedding vector for each sentence.
-            Console.ForegroundColor = ConsoleColor.Gray;
-            var embedding1 = (await embedder.GetEmbeddings(result.ToString())).Single();
-            var tokens1 = context.Tokenize(result.ToString(), true);
+            //Write out the embeddings
+            var tokens1 = context.Tokenize(result1, true);
+            var tokens2 = context.Tokenize(result2, true);
 
-            foreach (var comparison in comparisons)
+            var decoder = new StreamingTokenDecoder(context);
+            var tokens = new List<IReadOnlyList<LLamaToken>> { tokens1, tokens2 };
+
+            //Write out the text representation of each token
+            foreach (var list in tokens)
             {
-                var compare = comparison.Split(':').ElementAtOrDefault(1) ?? string.Empty;
-                var embedding2 = (await embedder.GetEmbeddings(compare)).Single();
+                var output = new List<string>();
 
-                // Compute cosine similarity
-                var similarity = CosineSimilarity(embedding1.ToArray(), embedding2.ToArray());
-
-                Console.ForegroundColor = ConsoleColor.Gray;
-
-                // Tokenize sentences
-        
-                var tokens2 = context.Tokenize(compare, true);
-
-                var decoder = new StreamingTokenDecoder(context);
-                var tokens = new List<IReadOnlyList<LLamaToken>> { tokens1, tokens2 };
-
-                //Write out the text representation of each token
-                var flag = false;
-
-                foreach (var list in tokens)
+                foreach (var token in list)
                 {
-                    foreach (var token in list)
-                    {
-                        if (flag) Console.Write("|");
-                        decoder.Add(token);
-                        Console.Write(decoder.Read());
-                        flag = true;
-                    }
-                    flag = false;
-                    Console.WriteLine();
+                    decoder.Add(token);
+                    output.Add(decoder.Read().Trim());
                 }
 
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.Write($"Got embeddings: ");
                 Console.ForegroundColor = ConsoleColor.Blue;
-                Console.WriteLine($"Cosine similarity: {similarity:F4}.");
+                Console.WriteLine($"{string.Join(' ', output)}");
+                Console.ForegroundColor = ConsoleColor.Gray;
             }
+
+            var embeddingVec1 = (await embedder.GetEmbeddings(result1)).Single();
+            var embeddingVec2 = (await embedder.GetEmbeddings(result2)).Single();
+
+            var similarity = CosineSimilarity(embeddingVec1.ToArray(), embeddingVec2.ToArray());
+
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.Write("Cosine similarity between the password outputs: ");
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.WriteLine($"{similarity:F4}");
+            Console.ForegroundColor = ConsoleColor.Gray;
+        }
+
+        private static async Task<string> GetModelOutput(StatelessExecutor executor, InferenceParams inferenceParams, string prompt)
+        {
+            var resultBuilder = new StringBuilder();
+            await foreach (var text in executor.InferAsync(prompt, inferenceParams))
+            {
+                resultBuilder.Append(text);
+            }
+
+            return resultBuilder.ToString().Trim();
         }
 
         private static float CosineSimilarity(float[] vec1, float[] vec2)
