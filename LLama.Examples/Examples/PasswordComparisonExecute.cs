@@ -1,8 +1,7 @@
-using DocumentFormat.OpenXml.Spreadsheet;
 using LLama.Common;
-using LLama.Examples.Extensions;
 using LLama.Native;
 using LLama.Sampling;
+using System.Diagnostics;
 using System.Text;
 
 namespace LLama.Examples.Examples
@@ -11,6 +10,7 @@ namespace LLama.Examples.Examples
     {
         public static async Task Run()
         {
+            var stopwatch = new Stopwatch();
             var modelPath = UserSettings.GetModelPath();
             var promptTemplate = (await File.ReadAllTextAsync("Assets/password-tokenise.txt")).Trim();
 
@@ -19,6 +19,7 @@ namespace LLama.Examples.Examples
                 GpuLayerCount = 0,
                 ContextSize = 2048,
             };
+            stopwatch.Start();
 
             using var model = await LLamaWeights.LoadFromFileAsync(parameters);
             var executor = new StatelessExecutor(model, parameters);
@@ -30,7 +31,10 @@ namespace LLama.Examples.Examples
                 MaxTokens = 600
             };
 
+            stopwatch.Stop();
             Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Model loaded in {stopwatch.ElapsedMilliseconds} ms.");
+
             Console.Write("Enter first password: ");
             Console.ForegroundColor = ConsoleColor.White;
             var password1 = Console.ReadLine();
@@ -40,20 +44,28 @@ namespace LLama.Examples.Examples
             Console.ForegroundColor = ConsoleColor.White;
             var password2 = Console.ReadLine();
 
+            stopwatch.Restart();
             var result1 = await GetModelOutput(executor, inferenceParams, promptTemplate.Replace("{password}", password1));
+            stopwatch.Stop();
 
             Console.ForegroundColor = ConsoleColor.White;
             Console.Write($"First password semantic tokens: ");
             Console.ForegroundColor = ConsoleColor.Blue;
-            Console.WriteLine(result1);
+            Console.Write(result1);
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine($" ({stopwatch.ElapsedMilliseconds} ms)");
             Console.ForegroundColor = ConsoleColor.Gray;
 
+            stopwatch.Restart();
             var result2 = await GetModelOutput(executor, inferenceParams, promptTemplate.Replace("{password}", password2));
+            stopwatch.Stop();
 
             Console.ForegroundColor = ConsoleColor.White;
             Console.Write($"Second password semantic tokens: ");
             Console.ForegroundColor = ConsoleColor.Blue;
-            Console.WriteLine(result2);
+            Console.Write(result2);
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine($" ({stopwatch.ElapsedMilliseconds} ms)");
             Console.ForegroundColor = ConsoleColor.Gray;
 
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -101,7 +113,7 @@ namespace LLama.Examples.Examples
             var embeddingVec1 = (await embedder.GetEmbeddings(result1)).Single();
             var embeddingVec2 = (await embedder.GetEmbeddings(result2)).Single();
 
-            var similarity = CosineSimilarity(embeddingVec1.ToArray(), embeddingVec2.ToArray());
+            var similarity = CosineSimilarity([.. embeddingVec1], [.. embeddingVec2]);
 
             Console.ForegroundColor = ConsoleColor.White;
             Console.Write("Cosine similarity between the password outputs: ");
@@ -110,16 +122,55 @@ namespace LLama.Examples.Examples
             Console.ForegroundColor = ConsoleColor.Gray;
         }
 
-        private static async Task<string> GetModelOutput(StatelessExecutor executor, InferenceParams inferenceParams, string prompt)
+        //ChatGPT modified version that times out after 30 seconds
+        private static async Task<string?> GetModelOutput(StatelessExecutor executor, InferenceParams inferenceParams, string prompt)
         {
             var resultBuilder = new StringBuilder();
-            await foreach (var text in executor.InferAsync(prompt, inferenceParams))
-            {
-                resultBuilder.Append(text);
-            }
 
-            return resultBuilder.ToString().Trim();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+            try
+            {
+                await foreach (var text in executor.InferAsync(prompt, inferenceParams, cts.Token))
+                {
+                    resultBuilder.Append(text);
+                }
+
+                // Sometimes, there is a hallucination separated by a CRLF, so we trim the result
+                var result = resultBuilder.ToString().Trim();
+
+                if (result.Contains('\n'))
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Hallucination detected.");
+                    Console.ForegroundColor = ConsoleColor.Gray;
+
+                    var splits = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    result = splits[1];
+                }
+
+                // Sometimes it hallicinates from the prompt examples e.g. 
+                //First password (@) semantic tokens: Result: 12345 abcde (10744 ms)
+                if (result.StartsWith("Result:"))
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Prompt hallucination artifact detected.");
+                    Console.ForegroundColor = ConsoleColor.Gray;
+
+                    result = result.Substring("Result:".Length);
+                }
+
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                // Timeout occurred
+                Console.WriteLine("Inference timed out after 30 seconds.");
+                throw;
+            }
         }
+
+
 
         private static float CosineSimilarity(float[] vec1, float[] vec2)
         {
